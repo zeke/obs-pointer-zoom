@@ -120,8 +120,8 @@ Relevant confirmed behavior:
 
 ## Edge clamping (pointer near screen edges/corners)
 
-`anchor_point(target, factor)` doesn't use the raw cursor fraction as the
-zoom pin directly. `apply_transform`'s position formula (`new_pos = ax +
+`anchor_point(target)` doesn't use the raw cursor fraction as the zoom
+pin directly. `apply_transform`'s position formula (`new_pos = ax +
 (base_pos - ax) * factor`) is a "zoom toward a fixed point" transform: it
 keeps whatever canvas point `ax` represents visually stationary while the
 item scales up around it. That formula is provably safe for any pin
@@ -145,25 +145,27 @@ flush-against-the-edge once the cursor is within `margin` of it, while
 still never exposing blank space (since the formula is valid for any
 input in `[0,1]`, which is all this ever produces).
 
-`margin` must be exactly `0.5 / factor` using the **live**, instantaneous
-factor (capped at 0.49 to avoid a zero-width span right at factor=1) —
-not the final target `zoom_factor`. Derivation: at a flush-left pin, the
-visible source-fraction range is `[0, 1/factor]`, whose center is exactly
-`0.5/factor`. For the cursor to be centered in the visible portion at
-the instant an edge locks flush, margin has to equal that center value at
-every instant, not just once fully zoomed in. An earlier version used the
-final `zoom_factor` instead (constant through the ease) reasoning that
-live-factor margin would be "unstable" near factor=1 — that concern
-turned out to be unfounded (the 0.49 cap already prevents any
-division-by-zero or discontinuity) and the fixed-margin version only had
-the centering property at rest, not during the ease-in/out transient.
-Note the live-factor version can cause an edge to flush-lock briefly
-during an early, low-factor part of the ease and then un-lock again as
-factor keeps climbing (if the cursor isn't within the *final* factor's
-margin) -- that's not a bug, it's an accurate reflection of "what a
-permanently-fixed zoom at this instant's factor would look like", which
-is the same recompute-fresh-every-tick model the rest of the animation
-already uses.
+`margin` is based on the **final** `zoom_factor` (capped at 0.49), held
+constant for the whole zoom, not the live in-animation factor. A second
+attempt tried the live factor, reasoning it'd make the cursor land
+exactly centered in the visible portion at the instant an edge locks
+flush, at every point during the ease, not just once fully zoomed in (at
+a flush-left pin, the visible source-fraction range is `[0, 1/factor]`,
+whose center is exactly `0.5/factor` -- so matching margin to the live
+factor does make that derivation hold continuously). That version was
+reverted too: margin shrinks as factor ramps up, so for a *perfectly
+stationary* cursor the remapped pin still drifts over the whole
+ease purely because of the margin changing, decoupling position's
+timing from scale's -- e.g. verified numerically, a cursor sitting at
+raw fraction 0.35 got remapped through 0.35 -> 0.0 (fully edge-locked!)
+-> 0.14 -> ... -> settling at 0.275, a visible lurch with no mouse
+movement involved. A constant (final-`zoom_factor`-based) margin keeps
+the pin fixed for a stationary cursor, so position and scale are always
+strictly proportional to the same `factor(t)` curve and complete in
+perfect lockstep, at the cost of the centered-at-lock-instant property
+only holding once fully zoomed in, not through the transient. Smooth,
+synchronized motion won out over that instant-by-instant precision --
+see git history for the numeric comparison of both versions.
 
 ## Scene item order / "topmost"
 

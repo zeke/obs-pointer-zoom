@@ -425,7 +425,7 @@ def mouse_location():
 # --------------------------------------------------------------------------
 
 
-def _remap_edge_margin(fraction, factor):
+def _remap_edge_margin(fraction):
     """Remap [0,1] so [0,margin]->0 and [1-margin,1]->1, linear in between.
 
     Plain clamping (restricting the input to [margin, 1-margin]) doesn't
@@ -435,28 +435,35 @@ def _remap_edge_margin(fraction, factor):
     short of that it just freezes early without ever reaching flush. This
     remaps the input so the margin band actually collapses to the true 0
     or 1 the formula needs, instead of merely bounding it.
+
+    margin is based on the *final* zoom_factor (a constant for the
+    duration of a given zoom), not the live in-animation factor. It has
+    to be constant: since apply_transform's position formula moves
+    proportionally to (factor-1), using a live-factor margin here would
+    make the pin itself drift over time even for a perfectly stationary
+    cursor (margin shrinks as factor ramps up), decoupling position's
+    timing from scale's and causing a visible lurch. A constant margin
+    keeps the pin fixed for a stationary cursor, so position and scale
+    stay strictly proportional to the same factor(t) curve and always
+    complete in lockstep. The tradeoff: the cursor lands exactly centered
+    in the visible portion at the moment of edge-lock only once fully
+    zoomed in, not continuously through the ease transient -- see
+    AGENTS.md "Edge clamping" for the previous attempt and why it lurched.
     """
-    margin = min(0.49, 0.5 / factor) if factor > 1 else 0.0
+    margin = min(0.49, 0.5 / zoom_factor) if zoom_factor > 1 else 0.0
     if margin <= 0:
         return fraction
     span = 1.0 - 2 * margin
     return min(1.0, max(0.0, (fraction - margin) / span))
 
 
-def anchor_point(target, factor):
+def anchor_point(target):
     """Canvas-space point (in the item's *base* layout) used as the zoom pin.
 
     Based on the cursor's fraction across the source, but remapped via
     _remap_edge_margin so a screen edge/corner comes fully into view once
     the cursor is within a margin of it, rather than requiring the cursor
     to reach the exact physical edge pixel.
-
-    margin must be exactly 0.5/factor (not e.g. based on the eventual
-    target zoom_factor) for the cursor to land exactly centered in the
-    visible portion at the instant an edge locks flush: at a flush-left
-    pin, the visible source-fraction range is [0, 1/factor], whose center
-    is 0.5/factor. Using the *live* factor keeps that property true at
-    every point during the ease, not just once fully zoomed in.
     """
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
@@ -471,8 +478,8 @@ def anchor_point(target, factor):
         fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
         fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
 
-    fx = _remap_edge_margin(fx, factor)
-    fy = _remap_edge_margin(fy, factor)
+    fx = _remap_edge_margin(fx)
+    fy = _remap_edge_margin(fy)
     return (bx + fx * sw * bsx, by + fy * sh * bsy)
 
 
@@ -488,7 +495,7 @@ def apply_transform(target, factor):
 
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
-    ax, ay = anchor_point(target, factor)
+    ax, ay = anchor_point(target)
 
     new_pos = obs.vec2()
     new_pos.x = ax + (bx - ax) * factor
