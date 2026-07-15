@@ -92,6 +92,22 @@ Relevant confirmed behavior:
   flag is set (by the signals above, or when the hotkey is pressed) — the
   per-frame hot path never scans the scene graph.
 
+## pyobjc gotchas
+
+- `CGDisplayCreateUUIDFromDisplayID` is **not** bridged by pyobjc's
+  `Quartz` module at all — confirmed by enumerating `dir(Quartz)`, it's
+  genuinely absent (not a naming/casing issue). Caused a real runtime
+  `AttributeError` the first time this ran against a live OBS. The C
+  symbol does exist, in `ColorSync.framework` and
+  `ApplicationServices.framework`; call it via `ctypes.CDLL(...)`
+  directly. Don't assume a CoreGraphics/ColorSync function is
+  pyobjc-bridged just because the rest of `Quartz` (CGGetActiveDisplayList,
+  CGDisplayBounds, CGEventGetLocation, etc.) works fine — check
+  `dir(Quartz)` first. Same goes for the CFUUID→string conversion: skip
+  `CFUUIDCreateString`/`CFStringRef` bridging entirely by reading raw
+  bytes with `CFUUIDGetUUIDBytes` and formatting with stdlib
+  `uuid.UUID(bytes=...)` instead.
+
 ## Setup / testing gotchas
 
 - OBS's Python scripting needs a framework-style Python build. Homebrew's
