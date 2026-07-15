@@ -8,6 +8,8 @@ Runs entirely as a single OBS Python script, no separate process, no
 obs-websocket. See [AGENTS.md](AGENTS.md) for how it works and how to
 develop it further.
 
+[**Watch a demo**](images/zoom-demo.mp4)
+
 ## Requirements
 
 - macOS, OBS Studio (built/tested against 32.1.2).
