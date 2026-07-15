@@ -44,7 +44,10 @@ except Exception as exc:  # noqa: BLE001 - report any import failure, don't gues
 
 HOTKEY_NAME = "pointer_zoom.hold"
 HOTKEY_DESC = "Hold: Zoom current source toward pointer (2x)"
-DISPLAY_CAPTURE_KIND = "display_capture"
+# Both ids show up in the wild depending on OS/OBS version: "screen_capture"
+# is the current macOS kind id (confirmed via this machine's OBS log);
+# "display_capture" was the legacy id. Accept either.
+DISPLAY_CAPTURE_KINDS = ("screen_capture", "display_capture")
 
 ZOOM_FACTOR = 2.0
 EASE_TAU = 0.12  # seconds; smaller = snappier, larger = floatier
@@ -58,6 +61,7 @@ selection_dirty = True
 _target = None  # cached base-state snapshot of the item we're animating
 _active_key = None  # sceneitem id of the item _target refers to
 progress = 0.0  # 0 = rest (1x), 1 = fully zoomed (ZOOM_FACTOR x)
+_error_logged = False  # rate-limit: never spam the script log every tick
 
 
 # --------------------------------------------------------------------------
@@ -118,12 +122,13 @@ def script_save(settings):
 
 
 def on_hotkey(pressed):
-    global shift_held, selection_dirty
+    global shift_held, selection_dirty, _error_logged
     shift_held = pressed
     if pressed:
         # Force a fresh look at "what's selected" the moment the key goes
         # down, in case selection changed while we weren't tracking it.
         selection_dirty = True
+        _error_logged = False
 
 
 def on_frontend_event(event):
@@ -156,8 +161,9 @@ def unbind_scene_signals():
 
 
 def on_selection_changed(calldata):
-    global selection_dirty
+    global selection_dirty, _error_logged
     selection_dirty = True
+    _error_logged = False  # give a fresh state a chance, don't stay disabled forever
 
 
 # --------------------------------------------------------------------------
@@ -174,58 +180,64 @@ def resolve_target():
     if not scene:
         return None
 
-    found = {"selected": None, "fallback": None}
+    # NOTE: obs.obs_scene_enum_items in this scripting environment is a
+    # hand-written wrapper (not the raw libobs C API) that takes just
+    # (scene) and returns a plain Python list of addref'd sceneitem
+    # objects -- it does NOT take a callback+param like the C signature.
+    # The list must be released with obs.sceneitem_list_release(items).
+    items = obs.obs_scene_enum_items(scene)
+    try:
+        selected = None
+        fallback = None
+        for candidate_item in items:
+            source = obs.obs_sceneitem_get_source(candidate_item)
+            if obs.obs_sceneitem_selected(candidate_item):
+                selected = candidate_item
+            elif (
+                fallback is None
+                and obs.obs_sceneitem_visible(candidate_item)
+                and obs.obs_source_get_unversioned_id(source) in DISPLAY_CAPTURE_KINDS
+            ):
+                fallback = candidate_item
 
-    def enum_cb(_scene, item, _param):
+        item = selected or fallback
+        if item is None:
+            return None
+
         source = obs.obs_sceneitem_get_source(item)
-        if obs.obs_sceneitem_selected(item):
-            found["selected"] = item
-        elif (
-            found["fallback"] is None
-            and obs.obs_sceneitem_visible(item)
-            and obs.obs_source_get_unversioned_id(source) == DISPLAY_CAPTURE_KIND
-        ):
-            found["fallback"] = item
-        return True
+        if obs.obs_source_get_unversioned_id(source) not in DISPLAY_CAPTURE_KINDS:
+            return None  # selected item isn't a screen capture; nothing sane to do
 
-    obs.obs_scene_enum_items(scene, enum_cb, None)
+        if obs.obs_sceneitem_get_bounds_type(item) != obs.OBS_BOUNDS_NONE:
+            return None  # v1 doesn't support "scale to fit" bounds-box items
 
-    item = found["selected"] or found["fallback"]
-    if item is None:
-        return None
+        settings = obs.obs_source_get_settings(source)
+        display_uuid = obs.obs_data_get_string(settings, "display_uuid")
+        obs.obs_data_release(settings)
 
-    source = obs.obs_sceneitem_get_source(item)
-    if obs.obs_source_get_unversioned_id(source) != DISPLAY_CAPTURE_KIND:
-        return None  # selected item isn't a screen capture; nothing sane to do
+        display_bounds = display_bounds_for_uuid(display_uuid)
+        if display_bounds is None:
+            return None
 
-    if obs.obs_sceneitem_get_bounds_type(item) != obs.OBS_BOUNDS_NONE:
-        return None  # v1 doesn't support "scale to fit" bounds-box items
+        src_w = obs.obs_source_get_width(source)
+        src_h = obs.obs_source_get_height(source)
+        if src_w <= 0 or src_h <= 0:
+            return None
 
-    settings = obs.obs_source_get_settings(source)
-    display_uuid = obs.obs_data_get_string(settings, "display_uuid")
-    obs.obs_data_release(settings)
+        pos = obs.vec2()
+        obs.obs_sceneitem_get_pos(item, pos)
+        scale = obs.vec2()
+        obs.obs_sceneitem_get_scale(item, scale)
 
-    display_bounds = display_bounds_for_uuid(display_uuid)
-    if display_bounds is None:
-        return None
-
-    src_w = obs.obs_source_get_width(source)
-    src_h = obs.obs_source_get_height(source)
-    if src_w <= 0 or src_h <= 0:
-        return None
-
-    pos = obs.vec2()
-    obs.obs_sceneitem_get_pos(item, pos)
-    scale = obs.vec2()
-    obs.obs_sceneitem_get_scale(item, scale)
-
-    return {
-        "item_id": obs.obs_sceneitem_get_id(item),
-        "base_pos": (pos.x, pos.y),
-        "base_scale": (scale.x, scale.y),
-        "display_bounds": display_bounds,  # (x, y, w, h) in points
-        "src_size": (src_w, src_h),
-    }
+        return {
+            "item_id": obs.obs_sceneitem_get_id(item),
+            "base_pos": (pos.x, pos.y),
+            "base_scale": (scale.x, scale.y),
+            "display_bounds": display_bounds,  # (x, y, w, h) in points
+            "src_size": (src_w, src_h),
+        }
+    finally:
+        obs.sceneitem_list_release(items)
 
 
 # --------------------------------------------------------------------------
@@ -326,6 +338,28 @@ def restore_target_if_any():
 
 
 def tick(seconds):
+    """Safety wrapper: never let an exception repeat every single frame.
+
+    A bug in _tick(...) previously threw on every tick once triggered
+    (60x/sec, indefinitely, while spamming the script log) because the
+    failure path left state such that it kept retrying. This wrapper
+    guarantees at most one log line per failure and always resets to a
+    safe rest state instead of leaving things stuck mid-retry.
+    """
+    global selection_dirty, _target, _active_key, progress, _error_logged
+    try:
+        _tick(seconds)
+    except Exception as exc:  # noqa: BLE001 - must never propagate from here
+        if not _error_logged:
+            obs.script_log(obs.LOG_ERROR, "pointer_zoom: tick failed, disabling until selection changes: %r" % exc)
+            _error_logged = True
+        _target = None
+        _active_key = None
+        progress = 0.0
+        selection_dirty = False
+
+
+def _tick(seconds):
     global selection_dirty, _target, _active_key, progress
 
     need_target = shift_held or progress > EPS

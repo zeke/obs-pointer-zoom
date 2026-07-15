@@ -49,16 +49,39 @@ Relevant confirmed behavior:
   scene source's signal handler (`obs.obs_source_get_signal_handler`),
   confirmed in `libobs/obs-scene.c`. Used to track the selected scene item
   without polling.
+- `obs.obs_scene_enum_items(scene)` is **not** the raw libobs
+  `obs_scene_enum_items(scene, callback, param)` signature. In this
+  scripting environment it's a hand-written wrapper
+  (`scene_enum_items` in `obs-scripting-python.c`) that takes just
+  `(scene)` and returns a plain Python list of addref'd sceneitem
+  objects. You must release it with `obs.sceneitem_list_release(items)`
+  when done (mirrors `obs_enum_sources`/`source_list_release`). Calling
+  it with the C signature raises `TypeError: scene_enum_items() takes
+  exactly 1 argument (3 given)` wrapped in a `SystemError`. This bit us
+  for real: the exception happened inside `tick()`, which runs every
+  video frame, and the failure path didn't clear the "needs resolving"
+  flag, so it retried and re-raised 60x/second indefinitely once
+  triggered (spammed ~33k lines into the OBS log in seconds and froze
+  the machine). Lesson: **any exception inside an `obs_add_tick_callback`
+  handler must be caught, logged at most once, and must always leave
+  state such that the same failure can't retry every single frame.**
+  `tick()` in `pointer_zoom.py` is now a thin wrapper around `_tick()`
+  that does exactly this — keep that structure for any future per-frame
+  callback in this codebase.
 
 ## Design notes
 
-- Only Display Capture (`display_capture` source kind) is supported.
-  Zooming "toward the pointer" requires mapping the global OS mouse
-  position onto a pixel inside the source, which is only meaningful for a
-  source that mirrors a real screen. The source's `display_uuid` setting
-  is resolved to a `CGDirectDisplayID` (via
-  `CGDisplayCreateUUIDFromDisplayID` over `CGGetActiveDisplayList`) to get
-  that screen's bounds.
+- Only Display Capture sources are supported. Zooming "toward the pointer"
+  requires mapping the global OS mouse position onto a pixel inside the
+  source, which is only meaningful for a source that mirrors a real
+  screen. The source's `display_uuid` setting is resolved to a
+  `CGDirectDisplayID` (via `CGDisplayCreateUUIDFromDisplayID` over
+  `CGGetActiveDisplayList`) to get that screen's bounds. The macOS source
+  kind id for this is `screen_capture` (confirmed from this machine's OBS
+  log — a newer ScreenCaptureKit-based unified capture source); the
+  legacy id `display_capture` is also accepted just in case older OBS
+  versions still use it. `DISPLAY_CAPTURE_KINDS` in `pointer_zoom.py`
+  holds both.
 - Items using a bounds-box ("scale to fit"/"stretch") transform are
   skipped in v1 — the zoom math assumes a plain position+scale transform.
 - Animation is frame-time-independent exponential easing
@@ -84,3 +107,14 @@ Relevant confirmed behavior:
   mechanism, and `CGEventGetLocation`/display bounds lookups are
   unrestricted reads. Verify this holds in practice when testing on a
   fresh machine.
+- Don't drive OBS's Settings window (the category list specifically) via
+  macOS Accessibility automation (AppleScript/System Events `click`,
+  `AXPress`, or raw `click at {x,y}`) — it reproducibly crashed OBS twice
+  while developing this (SIGSEGV in `objc_release`/`NSArray dealloc`
+  during Qt's event loop teardown). Adding/removing scripts via the
+  Scripts window's named buttons (`Add Scripts`, `Close`, etc., found via
+  `entire contents of window` + matching on `name`) was fine. Also: AX
+  `keystroke` is **not** reliably scoped to the target process — it goes
+  to whatever is actually frontmost at the OS level, which can silently
+  change while a script is mid-flight. Prefer asking a human to do
+  Settings/Hotkeys steps manually over automating them here.
