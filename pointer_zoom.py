@@ -1,9 +1,13 @@
 """
-pointer_zoom.py - Hold a hotkey to zoom the current source toward the mouse pointer.
+pointer_zoom.py - Hold (or toggle) a hotkey to zoom the current source toward the mouse pointer.
 
-Drop this into OBS (Tools > Scripts > +), then bind the "Hold: Zoom current
-source toward pointer (2x)" action in Settings > Hotkeys to whatever key you
-want (Left Shift works fine, and can be bound alone).
+Drop this into OBS (Tools > Scripts > +), then bind the "Zoom current source
+toward pointer" action in Settings > Hotkeys to whatever key you want (a
+lone modifier like Left Shift, or a remapped key like F18, works fine).
+
+Configurable in the script's own settings panel (Tools > Scripts, select
+this script): zoom level, zoom duration, and hold-to-zoom vs
+click-to-toggle.
 
 Target source resolution, per tick:
   1. The scene item currently selected in the Sources list, if it's a
@@ -80,24 +84,33 @@ def _display_uuid_string(display_id):
         _corefoundation.CFRelease(ref)
 
 HOTKEY_NAME = "pointer_zoom.hold"
-HOTKEY_DESC = "Hold: Zoom current source toward pointer (2x)"
+HOTKEY_DESC = "Zoom current source toward pointer"
 # Both ids show up in the wild depending on OS/OBS version: "screen_capture"
 # is the current macOS kind id (confirmed via this machine's OBS log);
 # "display_capture" was the legacy id. Accept either.
 DISPLAY_CAPTURE_KINDS = ("screen_capture", "display_capture")
 
-ZOOM_FACTOR = 2.0
-EASE_TAU = 0.12  # seconds; smaller = snappier, larger = floatier
 EPS = 0.002
 
+MODE_HOLD = "hold"
+MODE_TOGGLE = "toggle"
+DEFAULT_ZOOM_FACTOR = 2.0
+DEFAULT_ZOOM_DURATION = 0.12  # seconds (exponential-ease time constant)
+DEFAULT_TRIGGER_MODE = MODE_HOLD
+
+# User-configurable (see script_properties/script_update below).
+zoom_factor = DEFAULT_ZOOM_FACTOR
+ease_tau = DEFAULT_ZOOM_DURATION
+trigger_mode = DEFAULT_TRIGGER_MODE
+
 hotkey_id = obs.OBS_INVALID_HOTKEY_ID
-shift_held = False
+zoom_requested = False  # true = should be zoomed in, regardless of hold/toggle mode
 current_scene_source = None  # owned ref, released on rebind/unload
 selection_dirty = True
 
 _target = None  # cached base-state snapshot of the item we're animating
 _active_key = None  # sceneitem id of the item _target refers to
-progress = 0.0  # 0 = rest (1x), 1 = fully zoomed (ZOOM_FACTOR x)
+progress = 0.0  # 0 = rest (1x), 1 = fully zoomed (zoom_factor x)
 _error_logged = False  # rate-limit: never spam the script log every tick
 
 
@@ -123,9 +136,9 @@ def script_description():
     return (
         "<h3>Pointer Zoom</h3>"
         "<p>Bind the hotkey below (Settings &gt; Hotkeys &gt; \"%s\") to "
-        "Left Shift, or anything else. While held, the current/topmost "
-        "Display Capture source zooms in 2x centered on your mouse "
-        "pointer, and eases back out on release.</p>" % HOTKEY_DESC
+        "whatever key you like. In <b>Hold</b> mode, the current/topmost "
+        "Display Capture source zooms in while held and eases back out on "
+        "release. In <b>Toggle</b> mode, each press flips zoomed on/off.</p>" % HOTKEY_DESC
     ) + warning
 
 
@@ -160,17 +173,49 @@ def script_save(settings):
     obs.obs_data_array_release(saved)
 
 
+def script_defaults(settings):
+    obs.obs_data_set_default_double(settings, "zoom_factor", DEFAULT_ZOOM_FACTOR)
+    obs.obs_data_set_default_double(settings, "zoom_duration", DEFAULT_ZOOM_DURATION)
+    obs.obs_data_set_default_string(settings, "trigger_mode", DEFAULT_TRIGGER_MODE)
+
+
+def script_properties():
+    props = obs.obs_properties_create()
+    obs.obs_properties_add_float_slider(props, "zoom_factor", "Zoom level (x)", 1.1, 8.0, 0.1)
+    obs.obs_properties_add_float_slider(props, "zoom_duration", "Zoom duration (seconds)", 0.02, 1.0, 0.01)
+    mode_prop = obs.obs_properties_add_list(
+        props, "trigger_mode", "Trigger mode", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING
+    )
+    obs.obs_property_list_add_string(mode_prop, "Hold to zoom", MODE_HOLD)
+    obs.obs_property_list_add_string(mode_prop, "Click to toggle", MODE_TOGGLE)
+    return props
+
+
+def script_update(settings):
+    global zoom_factor, ease_tau, trigger_mode
+    zoom_factor = obs.obs_data_get_double(settings, "zoom_factor") or DEFAULT_ZOOM_FACTOR
+    ease_tau = obs.obs_data_get_double(settings, "zoom_duration") or DEFAULT_ZOOM_DURATION
+    trigger_mode = obs.obs_data_get_string(settings, "trigger_mode") or DEFAULT_TRIGGER_MODE
+
+
 # --------------------------------------------------------------------------
 # Hotkey + selection tracking (event-driven, not polled)
 # --------------------------------------------------------------------------
 
 
 def on_hotkey(pressed):
-    global shift_held, selection_dirty, _error_logged
-    shift_held = pressed
-    if pressed:
-        # Force a fresh look at "what's selected" the moment the key goes
-        # down, in case selection changed while we weren't tracking it.
+    global zoom_requested, selection_dirty, _error_logged
+
+    if trigger_mode == MODE_TOGGLE:
+        if not pressed:
+            return  # toggle mode only reacts to key-down, ignores key-up
+        zoom_requested = not zoom_requested
+    else:
+        zoom_requested = pressed
+
+    if zoom_requested:
+        # Force a fresh look at "what's selected" the moment zoom is
+        # requested, in case selection changed while we weren't tracking it.
         selection_dirty = True
         _error_logged = False
 
@@ -403,7 +448,7 @@ def tick(seconds):
 def _tick(seconds):
     global selection_dirty, _target, _active_key, progress
 
-    need_target = shift_held or progress > EPS
+    need_target = zoom_requested or progress > EPS
 
     if selection_dirty and need_target:
         candidate = resolve_target()
@@ -419,12 +464,12 @@ def _tick(seconds):
         _active_key = candidate_key
         selection_dirty = False
 
-    goal = 1.0 if (shift_held and _target is not None) else 0.0
+    goal = 1.0 if (zoom_requested and _target is not None) else 0.0
 
     if progress <= EPS and goal == 0.0:
         return
 
-    alpha = 1.0 - math.exp(-seconds / EASE_TAU) if seconds > 0 else 1.0
+    alpha = 1.0 - math.exp(-seconds / ease_tau) if seconds > 0 else 1.0
     progress += (goal - progress) * alpha
 
     if _target is None:
@@ -438,4 +483,4 @@ def _tick(seconds):
         _active_key = None
         return
 
-    apply_transform(_target, ZOOM_FACTOR ** progress)
+    apply_transform(_target, zoom_factor ** progress)

@@ -35,17 +35,30 @@ develop it further.
 
 4. In OBS: **Tools > Scripts > +**, add `pointer_zoom.py` from this repo.
 
-5. **Settings > Hotkeys**, find "Hold: Zoom current source toward pointer
-   (2x)", and bind it to Left Shift (or anything else you like — it works
-   as a hold, not a toggle).
+5. **Settings > Hotkeys**, find "Zoom current source toward pointer", and
+   bind it to whatever key you like — a lone modifier (Left Shift) works,
+   as does a remapped key (e.g. Caps Lock remapped to F18, handy if you
+   don't want Shift itself triggering the zoom while typing in other apps).
 
 ## Usage
 
 Select a Display Capture source in the Sources list (or leave nothing
 selected and it'll fall back to the topmost visible Display Capture
-source in the current scene), then hold your bound key. The source zooms
-in 2x toward wherever your mouse currently is on that screen, and eases
-back to 1x when you let go.
+source in the current scene), then trigger your bound key. The source
+zooms toward wherever your mouse currently is on that screen, and eases
+back out when you're done.
+
+## Configuration
+
+In OBS: **Tools > Scripts**, select `pointer_zoom.py`, and use its
+settings panel to adjust:
+
+- **Zoom level (x)** — how far it zooms in, default 2x
+- **Zoom duration (seconds)** — roughly how long the ease in/out takes,
+  default 0.12s
+- **Trigger mode** — **Hold to zoom** (zoomed while the key is down,
+  eases back out on release) or **Click to toggle** (each press flips
+  zoomed on/off)
 
 Only Display Capture sources are supported — the zoom is anchored to a
 real pixel on a real screen, which only makes sense for a source that's
