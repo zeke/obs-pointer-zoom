@@ -373,8 +373,22 @@ def mouse_location():
 # --------------------------------------------------------------------------
 
 
-def anchor_point(target):
-    """Canvas-space point (in the item's *base* layout) under the cursor."""
+def anchor_point(target, factor):
+    """Canvas-space pin point (in the item's *base* layout) for this factor.
+
+    Naively using the raw cursor fraction as the pin would mean the
+    zoomed viewport only ever reaches the source's true edge when the
+    cursor sits exactly at fraction 0 or 1 -- anywhere short of that and
+    the viewport keeps "centering" on the cursor, which visually means it
+    can't get any closer to the edge than however far the cursor still
+    is from it. Instead, clamp the pin fraction so the viewport locks
+    flush against an edge as soon as the cursor is within half a
+    viewport-width of it: half_viewport = (1/factor)/2, since the visible
+    viewport at this zoom factor covers a 1/factor fraction of the
+    source. At factor=1 this collapses to a no-op (half_viewport=0.5,
+    pin always centered) which is fine: at 1x, position doesn't depend on
+    the pin at all (see apply_transform).
+    """
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
     sw, sh = target["src_size"]
@@ -382,10 +396,15 @@ def anchor_point(target):
     loc = mouse_location()
     dx, dy, dw, dh = target["display_bounds"]
     if loc is None or dw <= 0 or dh <= 0:
-        return (bx + (sw * bsx) / 2.0, by + (sh * bsy) / 2.0)
+        fx = fy = 0.5
+    else:
+        fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
+        fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
 
-    fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
-    fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
+    half_viewport = min(0.5, 0.5 / factor) if factor > 0 else 0.5
+    fx = min(1.0 - half_viewport, max(half_viewport, fx))
+    fy = min(1.0 - half_viewport, max(half_viewport, fy))
+
     return (bx + fx * sw * bsx, by + fy * sh * bsy)
 
 
@@ -401,7 +420,7 @@ def apply_transform(target, factor):
 
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
-    ax, ay = anchor_point(target)
+    ax, ay = anchor_point(target, factor)
 
     new_pos = obs.vec2()
     new_pos.x = ax + (bx - ax) * factor
