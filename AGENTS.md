@@ -107,8 +107,8 @@ Relevant confirmed behavior:
 
 ## Edge clamping (pointer near screen edges/corners)
 
-`anchor_point(target)` doesn't use the raw cursor fraction as the zoom
-pin directly. `apply_transform`'s position formula (`new_pos = ax +
+`anchor_point(target, factor)` doesn't use the raw cursor fraction as the
+zoom pin directly. `apply_transform`'s position formula (`new_pos = ax +
 (base_pos - ax) * factor`) is a "zoom toward a fixed point" transform: it
 keeps whatever canvas point `ax` represents visually stationary while the
 item scales up around it. That formula is provably safe for any pin
@@ -130,13 +130,27 @@ exactly `1`, and linearly rescale the middle band to still cover the full
 `[0,1]` range. Fed into the same unmodified formula, this reaches true
 flush-against-the-edge once the cursor is within `margin` of it, while
 still never exposing blank space (since the formula is valid for any
-input in `[0,1]`, which is all this ever produces). `margin` is sized
-from the *final* `zoom_factor` (`0.5 / zoom_factor`, capped at 0.49), not
-the live in-animation factor — using the live factor would make the
-margin swing from a degenerate ~0.5 (at factor=1, right when animation
-starts) down to its steady-state value, causing an unstable/jumpy pin
-during the ease-in for no benefit, since the margin doesn't need to
-track the animation at all.
+input in `[0,1]`, which is all this ever produces).
+
+`margin` must be exactly `0.5 / factor` using the **live**, instantaneous
+factor (capped at 0.49 to avoid a zero-width span right at factor=1) —
+not the final target `zoom_factor`. Derivation: at a flush-left pin, the
+visible source-fraction range is `[0, 1/factor]`, whose center is exactly
+`0.5/factor`. For the cursor to be centered in the visible portion at
+the instant an edge locks flush, margin has to equal that center value at
+every instant, not just once fully zoomed in. An earlier version used the
+final `zoom_factor` instead (constant through the ease) reasoning that
+live-factor margin would be "unstable" near factor=1 — that concern
+turned out to be unfounded (the 0.49 cap already prevents any
+division-by-zero or discontinuity) and the fixed-margin version only had
+the centering property at rest, not during the ease-in/out transient.
+Note the live-factor version can cause an edge to flush-lock briefly
+during an early, low-factor part of the ease and then un-lock again as
+factor keeps climbing (if the cursor isn't within the *final* factor's
+margin) -- that's not a bug, it's an accurate reflection of "what a
+permanently-fixed zoom at this instant's factor would look like", which
+is the same recompute-fresh-every-tick model the rest of the animation
+already uses.
 
 ## Scene item order / "topmost"
 

@@ -373,7 +373,7 @@ def mouse_location():
 # --------------------------------------------------------------------------
 
 
-def _remap_edge_margin(fraction):
+def _remap_edge_margin(fraction, factor):
     """Remap [0,1] so [0,margin]->0 and [1-margin,1]->1, linear in between.
 
     Plain clamping (restricting the input to [margin, 1-margin]) doesn't
@@ -384,24 +384,27 @@ def _remap_edge_margin(fraction):
     remaps the input so the margin band actually collapses to the true 0
     or 1 the formula needs, instead of merely bounding it.
     """
-    margin = min(0.49, 0.5 / zoom_factor) if zoom_factor > 1 else 0.0
+    margin = min(0.49, 0.5 / factor) if factor > 1 else 0.0
     if margin <= 0:
         return fraction
     span = 1.0 - 2 * margin
     return min(1.0, max(0.0, (fraction - margin) / span))
 
 
-def anchor_point(target):
+def anchor_point(target, factor):
     """Canvas-space point (in the item's *base* layout) used as the zoom pin.
 
     Based on the cursor's fraction across the source, but remapped via
     _remap_edge_margin so a screen edge/corner comes fully into view once
     the cursor is within a margin of it, rather than requiring the cursor
-    to reach the exact physical edge pixel. The margin is sized off the
-    target zoom_factor (how far we'll end up zoomed), not the live
-    in-animation factor, so it stays constant through the ease and the
-    point-invariant formula below (valid for any pin in [0,1]) still
-    never shows blank/off-source edges.
+    to reach the exact physical edge pixel.
+
+    margin must be exactly 0.5/factor (not e.g. based on the eventual
+    target zoom_factor) for the cursor to land exactly centered in the
+    visible portion at the instant an edge locks flush: at a flush-left
+    pin, the visible source-fraction range is [0, 1/factor], whose center
+    is 0.5/factor. Using the *live* factor keeps that property true at
+    every point during the ease, not just once fully zoomed in.
     """
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
@@ -415,8 +418,8 @@ def anchor_point(target):
         fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
         fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
 
-    fx = _remap_edge_margin(fx)
-    fy = _remap_edge_margin(fy)
+    fx = _remap_edge_margin(fx, factor)
+    fy = _remap_edge_margin(fy, factor)
     return (bx + fx * sw * bsx, by + fy * sh * bsy)
 
 
@@ -432,7 +435,7 @@ def apply_transform(target, factor):
 
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
-    ax, ay = anchor_point(target)
+    ax, ay = anchor_point(target, factor)
 
     new_pos = obs.vec2()
     new_pos.x = ax + (bx - ax) * factor
