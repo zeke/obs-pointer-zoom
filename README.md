@@ -43,21 +43,32 @@ develop it further.
 
 ## Usage
 
-Trigger your bound key. The topmost enabled/visible Display Capture
-source in the current scene zooms toward wherever your mouse currently is
-on that screen, regardless of what's selected in the Sources list, and
-eases back out when you're done.
+Trigger your bound key (click it once in the default **Click to toggle**
+mode, or hold it down in **Hold to zoom** mode). The topmost
+enabled/visible Display Capture source in the current scene zooms toward
+wherever your mouse currently is on that screen, regardless of what's
+selected in the Sources list, and eases back out when you toggle/release.
+
+As the pointer nears an edge or corner of the screen, the zoomed view
+locks flush against it instead of requiring the pointer to reach the
+exact physical edge pixel — how close it needs to get depends on the
+zoom level (more zoom = less margin needed).
 
 ## Configuration
 
 In OBS: **Tools > Scripts**, select `pointer_zoom.py`, and use its
-settings panel to adjust:
+settings panel (bottom of the window) to adjust:
 
-- **Zoom level** — how far it zooms in, default 2x
-- **Zoom duration** — roughly how long the ease in/out takes, default 0.12s
-- **Trigger mode** — **Click to toggle** (default: each press flips
-  zoomed on/off) or **Hold to zoom** (zoomed while the key is down, eases
-  back out on release)
+- **Zoom level** — how far it zooms in, default **3.00x**
+- **Zoom duration** — roughly how long the ease in/out takes, default **0.15s**
+- **Trigger mode** — default **Click to toggle** (each press flips zoomed
+  on/off), or **Hold to zoom** (zoomed while the key is down, eases back
+  out on release)
+
+Changes apply immediately, no restart needed. These are just the
+script's defaults for a fresh install — once you've changed a value it's
+saved with the rest of your scene collection, so it'll stick around
+across OBS restarts.
 
 Only Display Capture sources are supported — the zoom is anchored to a
 real pixel on a real screen, which only makes sense for a source that's

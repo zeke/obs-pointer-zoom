@@ -95,8 +95,8 @@ EPS = 0.002
 
 MODE_HOLD = "hold"
 MODE_TOGGLE = "toggle"
-DEFAULT_ZOOM_FACTOR = 2.0
-DEFAULT_ZOOM_DURATION = 0.12  # seconds (exponential-ease time constant)
+DEFAULT_ZOOM_FACTOR = 3.0
+DEFAULT_ZOOM_DURATION = 0.15  # seconds (exponential-ease time constant)
 DEFAULT_TRIGGER_MODE = MODE_TOGGLE
 
 # User-configurable (see script_properties/script_update below).
