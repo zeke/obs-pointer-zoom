@@ -57,8 +57,11 @@ Relevant confirmed behavior:
   exactly in phase with rendering (no risk of update/render rate jitter).
 - `item_select` / `item_deselect` / `item_transform` are real signals on a
   scene source's signal handler (`obs.obs_source_get_signal_handler`),
-  confirmed in `libobs/obs-scene.c`. Used to track the selected scene item
-  without polling.
+  confirmed in `libobs/obs-scene.c`. No longer used here -- targeting is
+  now always "topmost visible Display Capture", not "whatever's
+  selected", so tracking selection changes became unnecessary -- but
+  worth remembering these signals exist if selection-based behavior ever
+  comes back.
 - `obs.obs_scene_enum_items(scene)` is **not** the raw libobs
   `obs_scene_enum_items(scene, callback, param)` signature. In this
   scripting environment it's a hand-written wrapper
@@ -101,6 +104,28 @@ Relevant confirmed behavior:
 - Selection state is cached and only re-resolved when a `selection_dirty`
   flag is set (by the signals above, or when the hotkey is pressed) — the
   per-frame hot path never scans the scene graph.
+
+## Scene item order / "topmost"
+
+`obs.obs_scene_enum_items(scene)` walks `scene->first_item` forward via
+`->next` (confirmed in `libobs/obs-scene.c`). That is **back-to-front**
+render order, not front-to-back: `obs_scene_add` appends newly-added items
+at the tail when there's no explicit insertion point, and
+`scene_video_render` walks head-to-tail, alpha-blending each item in
+turn -- so whatever's drawn *last* (the tail) ends up visually on top.
+To find the topmost matching item, take the *last* match while iterating
+the returned list, not the first. (Got this backwards on the first pass;
+fixed once actually asked to target "topmost" instead of "selected or
+fallback".)
+
+## Qt widget quirks (scripting)
+
+`obs_properties_add_float_slider` renders a value box that's a few pixels
+too narrow for its own text on this OBS build (e.g. "2.0" clips to "2.("),
+at least at this machine's display scaling. There's no script-level API
+to set widget width. Workaround: use `obs_properties_add_float` (plain
+number field, no slider) instead -- `obs_property_float_set_suffix` for a
+unit label ("x", "s") reads fine there.
 
 ## pyobjc gotchas
 

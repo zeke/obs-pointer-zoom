@@ -1,7 +1,8 @@
 # obs-pointer-zoom
 
-Hold a hotkey in OBS Studio to zoom the current Display Capture source 2x,
-centered on your mouse pointer. Release to smoothly zoom back out.
+Trigger a hotkey in OBS Studio to zoom the topmost visible Display Capture
+source toward your mouse pointer, and ease smoothly back out when you're
+done.
 
 Runs entirely as a single OBS Python script, no separate process, no
 obs-websocket. See [AGENTS.md](AGENTS.md) for how it works and how to
@@ -42,23 +43,21 @@ develop it further.
 
 ## Usage
 
-Select a Display Capture source in the Sources list (or leave nothing
-selected and it'll fall back to the topmost visible Display Capture
-source in the current scene), then trigger your bound key. The source
-zooms toward wherever your mouse currently is on that screen, and eases
-back out when you're done.
+Trigger your bound key. The topmost enabled/visible Display Capture
+source in the current scene zooms toward wherever your mouse currently is
+on that screen, regardless of what's selected in the Sources list, and
+eases back out when you're done.
 
 ## Configuration
 
 In OBS: **Tools > Scripts**, select `pointer_zoom.py`, and use its
 settings panel to adjust:
 
-- **Zoom level (x)** — how far it zooms in, default 2x
-- **Zoom duration (seconds)** — roughly how long the ease in/out takes,
-  default 0.12s
-- **Trigger mode** — **Hold to zoom** (zoomed while the key is down,
-  eases back out on release) or **Click to toggle** (each press flips
-  zoomed on/off)
+- **Zoom level** — how far it zooms in, default 2x
+- **Zoom duration** — roughly how long the ease in/out takes, default 0.12s
+- **Trigger mode** — **Click to toggle** (default: each press flips
+  zoomed on/off) or **Hold to zoom** (zoomed while the key is down, eases
+  back out on release)
 
 Only Display Capture sources are supported — the zoom is anchored to a
 real pixel on a real screen, which only makes sense for a source that's

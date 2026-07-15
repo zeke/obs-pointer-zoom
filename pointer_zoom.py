@@ -9,11 +9,12 @@ Configurable in the script's own settings panel (Tools > Scripts, select
 this script): zoom level, zoom duration, and hold-to-zoom vs
 click-to-toggle.
 
-Target source resolution, per tick:
-  1. The scene item currently selected in the Sources list, if it's a
-     Display Capture source.
-  2. Otherwise, the topmost visible Display Capture item in the scene.
-  3. Otherwise, nothing happens (no-op).
+Target source resolution: always the topmost enabled/visible Display
+Capture item in the current scene, regardless of what's selected in the
+Sources list. "Topmost" = last in render order (rendered last = drawn on
+top; confirmed via libobs's obs-scene.c: obs_scene_add appends new items
+to the tail of the list, and scene_video_render walks head-to-tail with
+sequential alpha blending, so the tail is what's visually in front).
 
 Only Display Capture sources are supported: zooming "toward the pointer"
 only makes sense when the source is literally a mirror of a physical
@@ -96,7 +97,7 @@ MODE_HOLD = "hold"
 MODE_TOGGLE = "toggle"
 DEFAULT_ZOOM_FACTOR = 2.0
 DEFAULT_ZOOM_DURATION = 0.12  # seconds (exponential-ease time constant)
-DEFAULT_TRIGGER_MODE = MODE_HOLD
+DEFAULT_TRIGGER_MODE = MODE_TOGGLE
 
 # User-configurable (see script_properties/script_update below).
 zoom_factor = DEFAULT_ZOOM_FACTOR
@@ -106,7 +107,7 @@ trigger_mode = DEFAULT_TRIGGER_MODE
 hotkey_id = obs.OBS_INVALID_HOTKEY_ID
 zoom_requested = False  # true = should be zoomed in, regardless of hold/toggle mode
 current_scene_source = None  # owned ref, released on rebind/unload
-selection_dirty = True
+target_dirty = True
 
 _target = None  # cached base-state snapshot of the item we're animating
 _active_key = None  # sceneitem id of the item _target refers to
@@ -136,7 +137,7 @@ def script_description():
     return (
         "<h3>Pointer Zoom</h3>"
         "<p>Bind the hotkey below (Settings &gt; Hotkeys &gt; \"%s\") to "
-        "whatever key you like. In <b>Hold</b> mode, the current/topmost "
+        "whatever key you like. In <b>Hold</b> mode, the topmost visible "
         "Display Capture source zooms in while held and eases back out on "
         "release. In <b>Toggle</b> mode, each press flips zoomed on/off.</p>" % HOTKEY_DESC
     ) + warning
@@ -151,7 +152,7 @@ def script_load(settings):
     obs.obs_data_array_release(saved)
 
     obs.obs_frontend_add_event_callback(on_frontend_event)
-    rebind_scene_signals()
+    refresh_current_scene()
     obs.obs_add_tick_callback(tick)
 
     if not QUARTZ_OK:
@@ -164,7 +165,7 @@ def script_unload():
     obs.obs_remove_tick_callback(tick)
     obs.obs_frontend_remove_event_callback(on_frontend_event)
     restore_target_if_any()
-    unbind_scene_signals()
+    release_current_scene()
 
 
 def script_save(settings):
@@ -180,9 +181,18 @@ def script_defaults(settings):
 
 
 def script_properties():
+    # Plain number fields, not obs_properties_add_float_slider: the
+    # slider variant's value box is a few pixels too narrow for its own
+    # text on this OBS build (Retina scaling?) and clips e.g. "2.0" to
+    # "2.(". Scripts can't set widget width directly, so drop the slider.
     props = obs.obs_properties_create()
-    obs.obs_properties_add_float_slider(props, "zoom_factor", "Zoom level (x)", 1.1, 8.0, 0.1)
-    obs.obs_properties_add_float_slider(props, "zoom_duration", "Zoom duration (seconds)", 0.02, 1.0, 0.01)
+
+    zoom_prop = obs.obs_properties_add_float(props, "zoom_factor", "Zoom level", 1.1, 8.0, 0.1)
+    obs.obs_property_float_set_suffix(zoom_prop, "x")
+
+    duration_prop = obs.obs_properties_add_float(props, "zoom_duration", "Zoom duration", 0.02, 1.0, 0.01)
+    obs.obs_property_float_set_suffix(duration_prop, "s")
+
     mode_prop = obs.obs_properties_add_list(
         props, "trigger_mode", "Trigger mode", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING
     )
@@ -199,12 +209,12 @@ def script_update(settings):
 
 
 # --------------------------------------------------------------------------
-# Hotkey + selection tracking (event-driven, not polled)
+# Hotkey handling and current-scene tracking
 # --------------------------------------------------------------------------
 
 
 def on_hotkey(pressed):
-    global zoom_requested, selection_dirty, _error_logged
+    global zoom_requested, target_dirty, _error_logged
 
     if trigger_mode == MODE_TOGGLE:
         if not pressed:
@@ -214,45 +224,39 @@ def on_hotkey(pressed):
         zoom_requested = pressed
 
     if zoom_requested:
-        # Force a fresh look at "what's selected" the moment zoom is
-        # requested, in case selection changed while we weren't tracking it.
-        selection_dirty = True
+        # Force a fresh look at what's currently topmost the moment zoom
+        # is requested, in case the scene's composition changed since.
+        target_dirty = True
         _error_logged = False
 
 
 def on_frontend_event(event):
     if event == obs.OBS_FRONTEND_EVENT_SCENE_CHANGED:
         restore_target_if_any()
-        rebind_scene_signals()
+        refresh_current_scene()
 
 
-def rebind_scene_signals():
-    global current_scene_source, selection_dirty
+def refresh_current_scene():
+    """Track which source is the current program scene.
 
-    unbind_scene_signals()
+    We don't care about scene item selection at all anymore -- the target
+    is always "whatever is topmost right now", resolved fresh each time
+    zoom is requested. This just keeps current_scene_source pointing at
+    the right scene and marks the target stale on scene switches.
+    """
+    global current_scene_source, target_dirty
+
+    release_current_scene()
     current_scene_source = obs.obs_frontend_get_current_scene()
-    if current_scene_source:
-        handler = obs.obs_source_get_signal_handler(current_scene_source)
-        obs.signal_handler_connect(handler, "item_select", on_selection_changed)
-        obs.signal_handler_connect(handler, "item_deselect", on_selection_changed)
-    selection_dirty = True
+    target_dirty = True
 
 
-def unbind_scene_signals():
+def release_current_scene():
     global current_scene_source
 
     if current_scene_source:
-        handler = obs.obs_source_get_signal_handler(current_scene_source)
-        obs.signal_handler_disconnect(handler, "item_select", on_selection_changed)
-        obs.signal_handler_disconnect(handler, "item_deselect", on_selection_changed)
         obs.obs_source_release(current_scene_source)
         current_scene_source = None
-
-
-def on_selection_changed(calldata):
-    global selection_dirty, _error_logged
-    selection_dirty = True
-    _error_logged = False  # give a fresh state a chance, don't stay disabled forever
 
 
 # --------------------------------------------------------------------------
@@ -276,26 +280,25 @@ def resolve_target():
     # The list must be released with obs.sceneitem_list_release(items).
     items = obs.obs_scene_enum_items(scene)
     try:
-        selected = None
-        fallback = None
+        # obs_scene_enum_items walks scene->first_item -> ->next, which is
+        # back-to-front render order (confirmed in libobs/obs-scene.c:
+        # obs_scene_add appends new items at the tail, and
+        # scene_video_render walks head-to-tail alpha-blending each in
+        # turn, so the tail is drawn last = on top). So the *last*
+        # matching item in this iteration is the topmost one, not the
+        # first.
+        item = None
         for candidate_item in items:
             source = obs.obs_sceneitem_get_source(candidate_item)
-            if obs.obs_sceneitem_selected(candidate_item):
-                selected = candidate_item
-            elif (
-                fallback is None
-                and obs.obs_sceneitem_visible(candidate_item)
-                and obs.obs_source_get_unversioned_id(source) in DISPLAY_CAPTURE_KINDS
-            ):
-                fallback = candidate_item
+            if obs.obs_sceneitem_visible(candidate_item) and obs.obs_source_get_unversioned_id(
+                source
+            ) in DISPLAY_CAPTURE_KINDS:
+                item = candidate_item
 
-        item = selected or fallback
         if item is None:
             return None
 
         source = obs.obs_sceneitem_get_source(item)
-        if obs.obs_source_get_unversioned_id(source) not in DISPLAY_CAPTURE_KINDS:
-            return None  # selected item isn't a screen capture; nothing sane to do
 
         if obs.obs_sceneitem_get_bounds_type(item) != obs.OBS_BOUNDS_NONE:
             return None  # v1 doesn't support "scale to fit" bounds-box items
@@ -432,37 +435,37 @@ def tick(seconds):
     guarantees at most one log line per failure and always resets to a
     safe rest state instead of leaving things stuck mid-retry.
     """
-    global selection_dirty, _target, _active_key, progress, _error_logged
+    global target_dirty, _target, _active_key, progress, _error_logged
     try:
         _tick(seconds)
     except Exception as exc:  # noqa: BLE001 - must never propagate from here
         if not _error_logged:
-            obs.script_log(obs.LOG_ERROR, "pointer_zoom: tick failed, disabling until selection changes: %r" % exc)
+            obs.script_log(obs.LOG_ERROR, "pointer_zoom: tick failed, disabling until next zoom request: %r" % exc)
             _error_logged = True
         _target = None
         _active_key = None
         progress = 0.0
-        selection_dirty = False
+        target_dirty = False
 
 
 def _tick(seconds):
-    global selection_dirty, _target, _active_key, progress
+    global target_dirty, _target, _active_key, progress
 
     need_target = zoom_requested or progress > EPS
 
-    if selection_dirty and need_target:
+    if target_dirty and need_target:
         candidate = resolve_target()
         candidate_key = candidate["item_id"] if candidate else None
 
         if _active_key is not None and candidate_key != _active_key and progress > EPS:
-            # Selection changed mid-zoom: snap the old item back before
-            # switching so nothing gets left stuck zoomed in.
+            # Topmost item changed mid-zoom: snap the old item back
+            # before switching so nothing gets left stuck zoomed in.
             apply_transform(_target, 1.0)
             progress = 0.0
 
         _target = candidate
         _active_key = candidate_key
-        selection_dirty = False
+        target_dirty = False
 
     goal = 1.0 if (zoom_requested and _target is not None) else 0.0
 
