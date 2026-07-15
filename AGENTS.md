@@ -6,9 +6,19 @@ steps — it's the source of truth for future agent sessions, not the README.
 
 ## What this is
 
-A single OBS Studio Python script (`pointer_zoom.py`) that lets you hold a
-hotkey to zoom the current Display Capture source 2x toward the mouse
-pointer, easing in and out. No external process, no obs-websocket.
+A single OBS Studio Python script (`pointer_zoom.py`) that lets you
+trigger a hotkey to zoom the current Display Capture source toward the
+mouse pointer, easing in and out. No external process, no obs-websocket.
+Confirmed working end-to-end on the author's machine as of the commit
+adding this line.
+
+Configurable via the script's settings panel (Tools > Scripts, select the
+script): zoom level (`zoom_factor`), ease time constant (`ease_tau`,
+labeled "Zoom duration"), and trigger mode (`trigger_mode`: `"hold"` or
+`"toggle"`). See `script_defaults`/`script_properties`/`script_update` in
+`pointer_zoom.py`. The hotkey's internal registration name
+(`HOTKEY_NAME`) must stay stable across changes so saved user bindings
+aren't lost — only `HOTKEY_DESC` (display text) is safe to change freely.
 
 ## Stack
 
