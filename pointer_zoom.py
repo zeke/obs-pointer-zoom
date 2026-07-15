@@ -24,23 +24,60 @@ settings points to:
 See README.md in this repo for setup details.
 """
 
+import ctypes
 import math
+import uuid as uuid_lib
 
 import obspython as obs
 
 try:
     import Quartz
 
-    try:
-        from Quartz import CFUUIDCreateString
-    except ImportError:
-        from CoreFoundation import CFUUIDCreateString
-
     QUARTZ_OK = True
     QUARTZ_ERROR = None
 except Exception as exc:  # noqa: BLE001 - report any import failure, don't guess which
     QUARTZ_OK = False
     QUARTZ_ERROR = str(exc)
+
+try:
+    # CGDisplayCreateUUIDFromDisplayID isn't in pyobjc's Quartz bridge at
+    # all (confirmed via dir(Quartz) -- genuinely absent, not a naming
+    # issue). Call it directly via ctypes instead, and read the raw UUID
+    # bytes rather than going through CFUUIDCreateString/CFStringRef,
+    # which avoids needing any CF<->Python string bridging.
+    _colorsync = ctypes.CDLL("/System/Library/Frameworks/ColorSync.framework/ColorSync")
+    _corefoundation = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+
+    class _CFUUIDBytes(ctypes.Structure):
+        _fields_ = [("b%d" % i, ctypes.c_ubyte) for i in range(16)]
+
+    _colorsync.CGDisplayCreateUUIDFromDisplayID.restype = ctypes.c_void_p
+    _colorsync.CGDisplayCreateUUIDFromDisplayID.argtypes = [ctypes.c_uint32]
+    _corefoundation.CFUUIDGetUUIDBytes.restype = _CFUUIDBytes
+    _corefoundation.CFUUIDGetUUIDBytes.argtypes = [ctypes.c_void_p]
+    _corefoundation.CFRelease.restype = None
+    _corefoundation.CFRelease.argtypes = [ctypes.c_void_p]
+
+    CTYPES_UUID_OK = True
+    CTYPES_UUID_ERROR = None
+except Exception as exc:  # noqa: BLE001
+    CTYPES_UUID_OK = False
+    CTYPES_UUID_ERROR = str(exc)
+
+
+def _display_uuid_string(display_id):
+    """UUID string for a CGDirectDisplayID, or None."""
+    if not CTYPES_UUID_OK:
+        return None
+    ref = _colorsync.CGDisplayCreateUUIDFromDisplayID(display_id)
+    if not ref:
+        return None
+    try:
+        raw_bytes = _corefoundation.CFUUIDGetUUIDBytes(ref)
+        raw = bytes(getattr(raw_bytes, "b%d" % i) for i in range(16))
+        return str(uuid_lib.UUID(bytes=raw))
+    finally:
+        _corefoundation.CFRelease(ref)
 
 HOTKEY_NAME = "pointer_zoom.hold"
 HOTKEY_DESC = "Hold: Zoom current source toward pointer (2x)"
@@ -78,6 +115,11 @@ def script_description():
             "interpreter selected under Tools &gt; Scripts &gt; Python "
             "Settings.</p>" % QUARTZ_ERROR
         )
+    if not CTYPES_UUID_OK:
+        warning += (
+            "<p style='color:#d33'><b>Display UUID lookup unavailable: "
+            "%s</b></p>" % CTYPES_UUID_ERROR
+        )
     return (
         "<h3>Pointer Zoom</h3>"
         "<p>Bind the hotkey below (Settings &gt; Hotkeys &gt; \"%s\") to "
@@ -101,6 +143,8 @@ def script_load(settings):
 
     if not QUARTZ_OK:
         obs.script_log(obs.LOG_WARNING, "pointer_zoom: Quartz unavailable (%s); zoom disabled" % QUARTZ_ERROR)
+    if not CTYPES_UUID_OK:
+        obs.script_log(obs.LOG_WARNING, "pointer_zoom: display UUID lookup unavailable (%s); zoom disabled" % CTYPES_UUID_ERROR)
 
 
 def script_unload():
@@ -247,7 +291,7 @@ def resolve_target():
 
 def display_bounds_for_uuid(uuid_str):
     """(x, y, w, h) in points for the display matching display_uuid, or None."""
-    if not QUARTZ_OK or not uuid_str:
+    if not QUARTZ_OK or not CTYPES_UUID_OK or not uuid_str:
         return None
 
     err, display_ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
@@ -255,10 +299,7 @@ def display_bounds_for_uuid(uuid_str):
         return None
 
     for display_id in list(display_ids)[:count]:
-        cfuuid = Quartz.CGDisplayCreateUUIDFromDisplayID(display_id)
-        if not cfuuid:
-            continue
-        if str(CFUUIDCreateString(None, cfuuid)).lower() != uuid_str.lower():
+        if _display_uuid_string(display_id) != uuid_str.lower():
             continue
         bounds = Quartz.CGDisplayBounds(display_id)
         return (
