@@ -105,21 +105,6 @@ Relevant confirmed behavior:
   flag is set (by the signals above, or when the hotkey is pressed) — the
   per-frame hot path never scans the scene graph.
 
-## Edge clamping (pointer near screen edges/corners)
-
-`anchor_point(target, factor)` doesn't use the raw cursor fraction as the
-zoom pin directly. At a given `factor`, the visible viewport covers a
-`1/factor` fraction of the source; its center (the pin) can only range
-over `[half_viewport, 1 - half_viewport]` where `half_viewport =
-0.5/factor` without the viewport panning past the source's true edge. So
-the pin fraction is clamped to that range rather than passed through
-raw. Net effect: once the cursor gets within half a viewport-width of an
-edge/corner, the zoomed view locks flush against it instead of requiring
-the cursor to sit exactly at fraction 0 or 1. This is computed from the
-current instantaneous `factor` (not just the final target zoom), so the
-clamp region shrinks smoothly as the ease-in animation progresses --
-no discontinuity when the hold/toggle finishes animating.
-
 ## Scene item order / "topmost"
 
 `obs.obs_scene_enum_items(scene)` walks `scene->first_item` forward via
