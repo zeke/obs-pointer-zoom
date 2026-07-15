@@ -84,17 +84,30 @@ Relevant confirmed behavior:
 
 ## Design notes
 
-- Only Display Capture sources are supported. Zooming "toward the pointer"
-  requires mapping the global OS mouse position onto a pixel inside the
-  source, which is only meaningful for a source that mirrors a real
-  screen. The source's `display_uuid` setting is resolved to a
-  `CGDirectDisplayID` (via `CGDisplayCreateUUIDFromDisplayID` over
-  `CGGetActiveDisplayList`) to get that screen's bounds. The macOS source
-  kind id for this is `screen_capture` (confirmed from this machine's OBS
-  log — a newer ScreenCaptureKit-based unified capture source); the
-  legacy id `display_capture` is also accepted just in case older OBS
-  versions still use it. `DISPLAY_CAPTURE_KINDS` in `pointer_zoom.py`
-  holds both.
+- Only the macOS "Screen Capture" source kind (`screen_capture`; legacy
+  `display_capture` id also accepted, see `DISPLAY_CAPTURE_KINDS`) is
+  supported. Zooming "toward the pointer" requires mapping the global OS
+  mouse position onto a pixel inside the source, which is only
+  meaningful for a source that mirrors real on-screen content.
+- That source kind is actually one unified source with a `"type"`
+  setting selecting among three capture *methods* (confirmed in
+  `obs-studio`'s `plugins/mac-capture/mac-sck-video-capture.m`):
+  `0`=Display, `1`=Window, `2`=Application. All three are supported.
+  Display and Application capture both key off a `"display_uuid"`
+  setting and cover a whole display's pixel dimensions (Application
+  capture just filters which windows render into that same
+  display-sized frame server-side) -- geometrically identical for our
+  purposes, resolved via `CGDisplayCreateUUIDFromDisplayID` over
+  `CGGetActiveDisplayList` same as before. Window capture keys off a
+  `"window"` `CGWindowID` setting instead, resolved via
+  `CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, id)` +
+  `CGRectMakeWithDictionaryRepresentation` on its `kCGWindowBounds`
+  entry -- both real functions, both actually bridged in pyobjc's
+  `Quartz` this time (checked `dir(Quartz)` first, given the track
+  record above). Unlike a display's bounds, a window's frame can
+  move/resize at any moment, so `current_capture_bounds()` resolves it
+  fresh on every call (every tick while zoomed) instead of caching it
+  once on the target snapshot like the rest of the target's state.
 - Items using a bounds-box ("scale to fit"/"stretch") transform are
   skipped in v1 — the zoom math assumes a plain position+scale transform.
 - Animation is frame-time-independent exponential easing

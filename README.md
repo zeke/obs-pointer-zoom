@@ -1,8 +1,8 @@
 # obs-pointer-zoom
 
-Trigger a hotkey in OBS Studio to zoom the topmost visible Display Capture
-source toward your mouse pointer, and ease smoothly back out when you're
-done.
+Trigger a hotkey in OBS Studio to zoom the topmost visible macOS Screen
+Capture source (Display, Window, or Application capture) toward your
+mouse pointer, and ease smoothly back out when you're done.
 
 Runs entirely as a single OBS Python script, no separate process, no
 obs-websocket. See [AGENTS.md](AGENTS.md) for how it works and how to
@@ -45,9 +45,10 @@ develop it further.
 
 Trigger your bound key (click it once in the default **Click to toggle**
 mode, or hold it down in **Hold to zoom** mode). The topmost
-enabled/visible Display Capture source in the current scene zooms toward
-wherever your mouse currently is on that screen, regardless of what's
-selected in the Sources list, and eases back out when you toggle/release.
+enabled/visible Screen Capture source in the current scene zooms toward
+wherever your mouse currently is, regardless of what's selected in the
+Sources list, and eases back out when you toggle/release. Works with any
+of the source's three capture methods (Display, Window, or Application).
 
 As the pointer nears an edge or corner of the screen, the zoomed view
 locks flush against it instead of requiring the pointer to reach the
@@ -70,6 +71,6 @@ script's defaults for a fresh install — once you've changed a value it's
 saved with the rest of your scene collection, so it'll stick around
 across OBS restarts.
 
-Only Display Capture sources are supported — the zoom is anchored to a
-real pixel on a real screen, which only makes sense for a source that's
-literally mirroring one.
+Only the macOS Screen Capture source is supported — the zoom is anchored
+to a real pixel of real on-screen content, which only makes sense for a
+source that's actually mirroring some.

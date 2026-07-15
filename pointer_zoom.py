@@ -9,17 +9,21 @@ Configurable in the script's own settings panel (Tools > Scripts, select
 this script): zoom level, zoom duration, and hold-to-zoom vs
 click-to-toggle.
 
-Target source resolution: always the topmost enabled/visible Display
-Capture item in the current scene, regardless of what's selected in the
-Sources list. "Topmost" = last in render order (rendered last = drawn on
-top; confirmed via libobs's obs-scene.c: obs_scene_add appends new items
-to the tail of the list, and scene_video_render walks head-to-tail with
-sequential alpha blending, so the tail is what's visually in front).
+Target source resolution: always the topmost enabled/visible macOS
+Screen Capture item in the current scene, regardless of what's selected
+in the Sources list. "Topmost" = last in render order (rendered last =
+drawn on top; confirmed via libobs's obs-scene.c: obs_scene_add appends
+new items to the tail of the list, and scene_video_render walks
+head-to-tail with sequential alpha blending, so the tail is what's
+visually in front).
 
-Only Display Capture sources are supported: zooming "toward the pointer"
-only makes sense when the source is literally a mirror of a physical
-screen, since that's what lets us map the global mouse position onto a
-pixel inside the source.
+Only the macOS "Screen Capture" source is supported, in any of its three
+capture methods (Display, Window, or Application) -- zooming "toward the
+pointer" only makes sense when the source is a mirror of real on-screen
+content, since that's what lets us map the global mouse position onto a
+pixel inside the source. Display and Application capture both cover a
+whole display and are handled identically; Window capture tracks that
+window's live on-screen frame, which can move/resize at any time.
 
 Requires pyobjc (Quartz) in whatever Python interpreter OBS's Script
 settings points to:
@@ -90,6 +94,19 @@ HOTKEY_DESC = "Zoom current source toward pointer"
 # is the current macOS kind id (confirmed via this machine's OBS log);
 # "display_capture" was the legacy id. Accept either.
 DISPLAY_CAPTURE_KINDS = ("screen_capture", "display_capture")
+
+# The unified "screen_capture" source has one "type" setting selecting
+# among these three capture methods (confirmed in obs-studio's
+# plugins/mac-capture/mac-sck-video-capture.m). Display and Application
+# capture both key off a "display_uuid" setting and cover a whole
+# display's pixel dimensions (Application capture just filters which
+# windows render into that same display-sized frame) -- geometrically
+# identical for our purposes. Window capture keys off a "window"
+# CGWindowID instead, and its frame can move/resize anytime, so it's
+# looked up fresh every tick rather than cached like a display's bounds.
+CAPTURE_TYPE_DISPLAY = 0
+CAPTURE_TYPE_WINDOW = 1
+CAPTURE_TYPE_APPLICATION = 2
 
 EPS = 0.002
 
@@ -304,12 +321,19 @@ def resolve_target():
             return None  # v1 doesn't support "scale to fit" bounds-box items
 
         settings = obs.obs_source_get_settings(source)
+        capture_type = obs.obs_data_get_int(settings, "type")
         display_uuid = obs.obs_data_get_string(settings, "display_uuid")
+        window_id = obs.obs_data_get_int(settings, "window")
         obs.obs_data_release(settings)
 
-        display_bounds = display_bounds_for_uuid(display_uuid)
-        if display_bounds is None:
-            return None
+        target = {
+            "item_id": obs.obs_sceneitem_get_id(item),
+            "capture_type": capture_type,
+            "display_uuid": display_uuid,
+            "window_id": window_id,
+        }
+        if current_capture_bounds(target) is None:
+            return None  # e.g. window capture pointed at a closed window
 
         src_w = obs.obs_source_get_width(source)
         src_h = obs.obs_source_get_height(source)
@@ -321,13 +345,10 @@ def resolve_target():
         scale = obs.vec2()
         obs.obs_sceneitem_get_scale(item, scale)
 
-        return {
-            "item_id": obs.obs_sceneitem_get_id(item),
-            "base_pos": (pos.x, pos.y),
-            "base_scale": (scale.x, scale.y),
-            "display_bounds": display_bounds,  # (x, y, w, h) in points
-            "src_size": (src_w, src_h),
-        }
+        target["base_pos"] = (pos.x, pos.y)
+        target["base_scale"] = (scale.x, scale.y)
+        target["src_size"] = (src_w, src_h)
+        return target
     finally:
         obs.sceneitem_list_release(items)
 
@@ -335,6 +356,18 @@ def resolve_target():
 # --------------------------------------------------------------------------
 # macOS display / cursor helpers
 # --------------------------------------------------------------------------
+
+
+def current_capture_bounds(target):
+    """(x, y, w, h) in points for whatever this target currently captures.
+
+    Looked up fresh on every call rather than cached on the target: a
+    captured window can move or resize at any time, so its bounds can't
+    be snapshotted once like a display's can.
+    """
+    if target["capture_type"] == CAPTURE_TYPE_WINDOW:
+        return window_bounds_for_id(target["window_id"])
+    return display_bounds_for_uuid(target["display_uuid"])
 
 
 def display_bounds_for_uuid(uuid_str):
@@ -357,6 +390,25 @@ def display_bounds_for_uuid(uuid_str):
             bounds.size.height,
         )
     return None
+
+
+def window_bounds_for_id(window_id):
+    """(x, y, w, h) in points for a window by CGWindowID, or None."""
+    if not QUARTZ_OK or not window_id:
+        return None
+
+    info_list = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionIncludingWindow, window_id)
+    if not info_list:
+        return None  # window closed, or we lack permission to see it
+
+    bounds_dict = info_list[0].get("kCGWindowBounds")
+    if not bounds_dict:
+        return None
+
+    ok, rect = Quartz.CGRectMakeWithDictionaryRepresentation(bounds_dict, None)
+    if not ok:
+        return None
+    return (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
 
 
 def mouse_location():
@@ -411,10 +463,11 @@ def anchor_point(target, factor):
     sw, sh = target["src_size"]
 
     loc = mouse_location()
-    dx, dy, dw, dh = target["display_bounds"]
-    if loc is None or dw <= 0 or dh <= 0:
+    bounds = current_capture_bounds(target)
+    if loc is None or bounds is None or bounds[2] <= 0 or bounds[3] <= 0:
         fx = fy = 0.5
     else:
+        dx, dy, dw, dh = bounds
         fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
         fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
 
