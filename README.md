@@ -8,7 +8,7 @@ Runs entirely as a single OBS Python script, no separate process, no
 obs-websocket. See [AGENTS.md](AGENTS.md) for how it works and how to
 develop it further.
 
-[**Watch a demo**](images/zoom-demo.mp4)
+[**Watch a demo**](images/zoom-demo-google.mp4)
 
 ## Requirements
 
