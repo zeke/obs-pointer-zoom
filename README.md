@@ -57,6 +57,8 @@ zoom level (more zoom = less margin needed).
 
 ## Configuration
 
+![The Scripts window in OBS, showing pointer_zoom.py loaded with its description and settings panel](images/scripts-panel.jpg)
+
 In OBS: **Tools > Scripts**, select `pointer_zoom.py`, and use its
 settings panel (bottom of the window) to adjust:
 
