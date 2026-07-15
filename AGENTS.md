@@ -101,9 +101,42 @@ Relevant confirmed behavior:
   (`progress += (goal - progress) * (1 - exp(-dt/tau))`), driven by the
   real per-tick `seconds` from `obs_add_tick_callback`, not an assumed
   fixed interval.
-- Selection state is cached and only re-resolved when a `selection_dirty`
-  flag is set (by the signals above, or when the hotkey is pressed) — the
-  per-frame hot path never scans the scene graph.
+- Target state is cached and only re-resolved when `target_dirty` is set
+  (on zoom request or scene switch) — the per-frame hot path never scans
+  the scene graph.
+
+## Edge clamping (pointer near screen edges/corners)
+
+`anchor_point(target)` doesn't use the raw cursor fraction as the zoom
+pin directly. `apply_transform`'s position formula (`new_pos = ax +
+(base_pos - ax) * factor`) is a "zoom toward a fixed point" transform: it
+keeps whatever canvas point `ax` represents visually stationary while the
+item scales up around it. That formula is provably safe for any pin
+fraction in `[0,1]` — plugging in the algebra shows the zoomed item's
+edges never fall short of the base item's edges (i.e. it can never expose
+blank/off-source space) for any such input — but it only lands *exactly*
+flush against an edge when fed a pin fraction of precisely `0` or `1`.
+
+A first attempt (reverted, see git history) tried to get "edges come into
+view before the cursor reaches them" by clamping the fraction to
+`[margin, 1-margin]`. That doesn't work: clamping just freezes the input
+short of `0`/`1`, so the formula still doesn't produce a flush edge, it
+just stops responding to further cursor movement partway there — the
+zoom pin locks early but the edge never actually comes fully into frame.
+
+The fix is to *remap* the fraction instead of clamp it (`_remap_edge_margin`):
+squash `[0, margin]` down to exactly `0`, squash `[1-margin, 1]` up to
+exactly `1`, and linearly rescale the middle band to still cover the full
+`[0,1]` range. Fed into the same unmodified formula, this reaches true
+flush-against-the-edge once the cursor is within `margin` of it, while
+still never exposing blank space (since the formula is valid for any
+input in `[0,1]`, which is all this ever produces). `margin` is sized
+from the *final* `zoom_factor` (`0.5 / zoom_factor`, capped at 0.49), not
+the live in-animation factor — using the live factor would make the
+margin swing from a degenerate ~0.5 (at factor=1, right when animation
+starts) down to its steady-state value, causing an unstable/jumpy pin
+during the ease-in for no benefit, since the margin doesn't need to
+track the animation at all.
 
 ## Scene item order / "topmost"
 

@@ -373,8 +373,36 @@ def mouse_location():
 # --------------------------------------------------------------------------
 
 
+def _remap_edge_margin(fraction):
+    """Remap [0,1] so [0,margin]->0 and [1-margin,1]->1, linear in between.
+
+    Plain clamping (restricting the input to [margin, 1-margin]) doesn't
+    give a flush edge -- the point-invariant formula in apply_transform
+    only lands exactly flush against an edge when fed a pin fraction of
+    exactly 0 or 1 (see AGENTS.md "Edge clamping" for the derivation), so
+    short of that it just freezes early without ever reaching flush. This
+    remaps the input so the margin band actually collapses to the true 0
+    or 1 the formula needs, instead of merely bounding it.
+    """
+    margin = min(0.49, 0.5 / zoom_factor) if zoom_factor > 1 else 0.0
+    if margin <= 0:
+        return fraction
+    span = 1.0 - 2 * margin
+    return min(1.0, max(0.0, (fraction - margin) / span))
+
+
 def anchor_point(target):
-    """Canvas-space point (in the item's *base* layout) under the cursor."""
+    """Canvas-space point (in the item's *base* layout) used as the zoom pin.
+
+    Based on the cursor's fraction across the source, but remapped via
+    _remap_edge_margin so a screen edge/corner comes fully into view once
+    the cursor is within a margin of it, rather than requiring the cursor
+    to reach the exact physical edge pixel. The margin is sized off the
+    target zoom_factor (how far we'll end up zoomed), not the live
+    in-animation factor, so it stays constant through the ease and the
+    point-invariant formula below (valid for any pin in [0,1]) still
+    never shows blank/off-source edges.
+    """
     bx, by = target["base_pos"]
     bsx, bsy = target["base_scale"]
     sw, sh = target["src_size"]
@@ -382,10 +410,13 @@ def anchor_point(target):
     loc = mouse_location()
     dx, dy, dw, dh = target["display_bounds"]
     if loc is None or dw <= 0 or dh <= 0:
-        return (bx + (sw * bsx) / 2.0, by + (sh * bsy) / 2.0)
+        fx = fy = 0.5
+    else:
+        fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
+        fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
 
-    fx = min(1.0, max(0.0, (loc[0] - dx) / dw))
-    fy = min(1.0, max(0.0, (loc[1] - dy) / dh))
+    fx = _remap_edge_margin(fx)
+    fy = _remap_edge_margin(fy)
     return (bx + fx * sw * bsx, by + fy * sh * bsy)
 
 
